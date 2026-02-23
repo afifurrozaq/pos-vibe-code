@@ -71,10 +71,16 @@ router.post("/products", (req, res) => {
       .run(name, price, stock, category_id, image_url, timestamp);
     const productId = info.lastInsertRowid;
 
+    // Log initial stock
+    db.prepare("INSERT INTO stock_history (product_id, change_amount, new_stock, reason) VALUES (?, ?, ?, ?)")
+      .run(productId, stock, stock, "Initial Stock");
+
     if (variants && Array.isArray(variants)) {
       const insertVariant = db.prepare("INSERT INTO product_variants (product_id, name, stock, price_adjustment) VALUES (?, ?, ?, ?)");
+      const logHistory = db.prepare("INSERT INTO stock_history (product_id, variant_id, change_amount, new_stock, reason) VALUES (?, ?, ?, ?, ?)");
       for (const variant of variants) {
-        insertVariant.run(productId, variant.name, variant.stock, variant.price_adjustment || 0);
+        const vInfo = insertVariant.run(productId, variant.name, variant.stock, variant.price_adjustment || 0);
+        logHistory.run(productId, vInfo.lastInsertRowid, variant.stock, variant.stock, "Initial Stock");
       }
     }
     return productId;
@@ -90,7 +96,7 @@ router.put("/products/:id", (req, res) => {
   const timestamp = updated_at || Math.floor(Date.now() / 1000);
 
   try {
-    const current = db.prepare("SELECT updated_at FROM products WHERE id = ?").get() as { updated_at: number };
+    const current = db.prepare("SELECT stock, updated_at FROM products WHERE id = ?").get() as { stock: number, updated_at: number };
     if (current && timestamp < current.updated_at) {
       return res.status(409).json({ error: "Conflict: Server has a newer version", current });
     }
@@ -99,12 +105,21 @@ router.put("/products/:id", (req, res) => {
       db.prepare("UPDATE products SET name = ?, price = ?, stock = ?, category_id = ?, image_url = ?, updated_at = ? WHERE id = ?")
         .run(name, price, stock, category_id, image_url, timestamp, productId);
 
+      if (current && current.stock !== stock) {
+        db.prepare("INSERT INTO stock_history (product_id, change_amount, new_stock, reason) VALUES (?, ?, ?, ?)")
+          .run(productId, stock - current.stock, stock, "Manual Adjustment");
+      }
+
+      // For simplicity in this demo, we'll just log variant changes if they are new or stock differs
+      // In a real app, we'd compare existing variants more carefully
       db.prepare("DELETE FROM product_variants WHERE product_id = ?").run(productId);
 
       if (variants && Array.isArray(variants)) {
         const insertVariant = db.prepare("INSERT INTO product_variants (product_id, name, stock, price_adjustment) VALUES (?, ?, ?, ?)");
+        const logHistory = db.prepare("INSERT INTO stock_history (product_id, variant_id, change_amount, new_stock, reason) VALUES (?, ?, ?, ?, ?)");
         for (const variant of variants) {
-          insertVariant.run(productId, variant.name, variant.stock, variant.price_adjustment || 0);
+          const vInfo = insertVariant.run(productId, variant.name, variant.stock, variant.price_adjustment || 0);
+          logHistory.run(productId, vInfo.lastInsertRowid, variant.stock, variant.stock, "Product Update");
         }
       }
     });
@@ -132,14 +147,19 @@ router.post("/checkout", (req, res) => {
     const insertItem = db.prepare("INSERT INTO sale_items (sale_id, product_id, variant_id, quantity, price_at_sale) VALUES (?, ?, ?, ?, ?)");
     const updateProductStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
     const updateVariantStock = db.prepare("UPDATE product_variants SET stock = stock - ? WHERE id = ?");
+    const logHistory = db.prepare("INSERT INTO stock_history (product_id, variant_id, change_amount, new_stock, reason) VALUES (?, ?, ?, ?, ?)");
 
     for (const item of items) {
       insertItem.run(saleId, item.id, item.selected_variant_id || null, item.quantity, item.price);
       
       if (item.selected_variant_id) {
         updateVariantStock.run(item.quantity, item.selected_variant_id);
+        const newStock = db.prepare("SELECT stock FROM product_variants WHERE id = ?").get(item.selected_variant_id) as { stock: number };
+        logHistory.run(item.id, item.selected_variant_id, -item.quantity, newStock.stock, `Sale #${saleId}`);
       } else {
         updateProductStock.run(item.quantity, item.id);
+        const newStock = db.prepare("SELECT stock FROM products WHERE id = ?").get(item.id) as { stock: number };
+        logHistory.run(item.id, null, -item.quantity, newStock.stock, `Sale #${saleId}`);
       }
     }
     return saleId;
@@ -153,11 +173,23 @@ router.post("/checkout", (req, res) => {
   }
 });
 
+router.get("/products/:id/history", (req, res) => {
+  const history = db.prepare(`
+    SELECT h.*, v.name as variant_name
+    FROM stock_history h
+    LEFT JOIN product_variants v ON h.variant_id = v.id
+    WHERE h.product_id = ?
+    ORDER BY h.timestamp DESC
+  `).all(req.params.id);
+  res.json(history);
+});
+
 // Stats
 router.get("/stats", (req, res) => {
+  const threshold = parseInt(req.query.threshold as string) || 10;
   const totalRevenue = db.prepare("SELECT SUM(total_amount) as total FROM sales").get() as { total: number };
   const totalSales = db.prepare("SELECT COUNT(*) as count FROM sales").get() as { count: number };
-  const lowStock = db.prepare("SELECT COUNT(*) as count FROM products WHERE stock < 10").get() as { count: number };
+  const lowStock = db.prepare("SELECT COUNT(*) as count FROM products WHERE stock < ?").get(threshold) as { count: number };
   
   const recentSales = db.prepare(`
     SELECT s.*, (SELECT COUNT(*) FROM sale_items WHERE sale_id = s.id) as item_count

@@ -5,9 +5,10 @@ import { Stats } from '../types';
 
 interface DashboardProps {
   stats: Stats | null;
+  lowStockThreshold: number;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ stats }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ stats, lowStockThreshold }) => {
   if (!stats) return <div className="p-8">Loading stats...</div>;
 
   return (
@@ -45,7 +46,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ stats }) => {
               <AlertCircle size={24} />
             </div>
           </div>
-          <p className="text-sm font-medium text-zinc-500">Low Stock Items</p>
+          <p className="text-sm font-medium text-zinc-500">Low Stock Items (&lt;{lowStockThreshold})</p>
           <p className="text-3xl font-bold text-zinc-900 mt-1">{stats.lowStockCount}</p>
         </div>
       </div>

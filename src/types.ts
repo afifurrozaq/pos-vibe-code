@@ -42,6 +42,17 @@ export interface DailyRevenue {
   revenue: number;
 }
 
+export interface StockHistory {
+  id: number;
+  product_id: number;
+  variant_id?: number;
+  variant_name?: string;
+  change_amount: number;
+  new_stock: number;
+  reason: string;
+  timestamp: string;
+}
+
 export interface Stats {
   revenue: number;
   salesCount: number;

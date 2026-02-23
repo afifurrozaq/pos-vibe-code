@@ -137,7 +137,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({ products, categories, 
               >
                 <div className="aspect-square bg-zinc-100 rounded-xl mb-3 overflow-hidden">
                   <img 
-                    src={product.image_url || `https://picsum.photos/seed/${product.id}/300/300`} 
+                    src={product.image_url || `https://picsum.photos/seed/${encodeURIComponent(product.name)}/300/300`} 
                     alt={product.name}
                     className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                     referrerPolicy="no-referrer"
@@ -196,7 +196,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({ products, categories, 
                   className="flex items-center gap-4 group"
                 >
                   <div className="w-16 h-16 bg-zinc-100 rounded-xl overflow-hidden flex-shrink-0">
-                    <img src={item.image_url || `https://picsum.photos/seed/${item.id}/100/100`} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <img src={item.image_url || `https://picsum.photos/seed/${encodeURIComponent(item.name)}/100/100`} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-zinc-900 truncate">{item.name}</h4>

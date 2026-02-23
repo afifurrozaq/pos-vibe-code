@@ -69,5 +69,11 @@ export const api = {
       const data = await res.json();
       throw new Error(data.error || 'Delete category failed');
     }
+  },
+
+  async fetchProductHistory(id: number): Promise<any[]> {
+    const res = await fetch(`/api/products/${id}/history`);
+    if (!res.ok) throw new Error('Fetch history failed');
+    return res.json();
   }
 };

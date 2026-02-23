@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, Settings, Trash2, X } from 'lucide-react';
+import { Plus, Settings, Trash2, X, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Category } from '../types';
 import { api } from '../services/api';
+import { ConfirmationModal } from './ConfirmationModal';
 
 interface CategoriesProps {
   categories: Category[];
@@ -14,6 +15,8 @@ interface CategoriesProps {
 export const Categories: React.FC<CategoriesProps> = ({ categories, onRefresh, isOnline, onOfflineAction }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Partial<Category> | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [conflictData, setConflictData] = useState<any | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,27 +35,35 @@ export const Categories: React.FC<CategoriesProps> = ({ categories, onRefresh, i
       onRefresh();
     } catch (err: any) {
       if (err.type === 'conflict') {
-        if (confirm(`Conflict: This category was updated by another device. Overwrite with your changes?`)) {
-          await api.saveCategory({ ...editingCategory, updated_at: Math.floor(Date.now() / 1000) });
-          setIsModalOpen(false);
-          setEditingCategory(null);
-          onRefresh();
-        }
+        setConflictData(editingCategory);
       } else {
         alert(err.message || 'Operation failed');
       }
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (confirm('Are you sure you want to delete this category? This will fail if products are linked.')) {
-      try {
-        await api.deleteCategory(id);
-        onRefresh();
-      } catch (err: any) {
-        alert(err.message);
-      }
+  const handleResolveConflict = async () => {
+    if (!conflictData) return;
+    try {
+      await api.saveCategory({ ...conflictData, updated_at: Math.floor(Date.now() / 1000) });
+      setIsModalOpen(false);
+      setEditingCategory(null);
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Resolution failed');
     }
+    setConflictData(null);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteConfirmId) return;
+    try {
+      await api.deleteCategory(deleteConfirmId);
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message);
+    }
+    setDeleteConfirmId(null);
   };
 
   return (
@@ -92,7 +103,7 @@ export const Categories: React.FC<CategoriesProps> = ({ categories, onRefresh, i
                       <Settings size={18} />
                     </button>
                     <button 
-                      onClick={() => handleDelete(category.id)}
+                      onClick={() => setDeleteConfirmId(category.id)}
                       className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                     >
                       <Trash2 size={18} />
@@ -144,6 +155,25 @@ export const Categories: React.FC<CategoriesProps> = ({ categories, onRefresh, i
           </div>
         )}
       </AnimatePresence>
+
+      <ConfirmationModal
+        isOpen={deleteConfirmId !== null}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={handleDelete}
+        title="Delete Category"
+        message="Are you sure you want to delete this category? This action will fail if there are products currently linked to this category."
+        confirmText="Delete Category"
+      />
+
+      <ConfirmationModal
+        isOpen={conflictData !== null}
+        onClose={() => setConflictData(null)}
+        onConfirm={handleResolveConflict}
+        title="Conflict Detected"
+        message="This category was updated by another device while you were editing. Do you want to overwrite the server's version with your changes?"
+        confirmText="Overwrite Server"
+        variant="warning"
+      />
     </div>
   );
 };

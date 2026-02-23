@@ -17,6 +17,10 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [lowStockThreshold, setLowStockThreshold] = useState<number>(() => {
+    const saved = localStorage.getItem('low_stock_threshold');
+    return saved ? parseInt(saved, 10) : 10;
+  });
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
 
   const showNotification = useCallback((message: string, type: 'success' | 'error') => {
@@ -28,7 +32,7 @@ export default function App() {
       const [pData, cData, sData] = await Promise.all([
         api.fetchProducts(),
         api.fetchCategories(),
-        api.fetchStats()
+        fetch(`/api/stats?threshold=${lowStockThreshold}`).then(res => res.json())
       ]);
       setProducts(pData);
       setCategories(cData);
@@ -36,7 +40,12 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch data:', err);
     }
-  }, []);
+  }, [lowStockThreshold]);
+
+  const handleThresholdChange = (newThreshold: number) => {
+    setLowStockThreshold(newThreshold);
+    localStorage.setItem('low_stock_threshold', newThreshold.toString());
+  };
 
   const { isOnline, offlineQueue, addOfflineAction } = useOfflineSync(fetchData, showNotification);
 
@@ -124,7 +133,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="h-full overflow-y-auto"
               >
-                <Dashboard stats={stats} />
+                <Dashboard stats={stats} lowStockThreshold={lowStockThreshold} />
               </motion.div>
             )}
 
@@ -142,6 +151,8 @@ export default function App() {
                   onRefresh={fetchData} 
                   isOnline={isOnline}
                   onOfflineAction={addOfflineAction}
+                  lowStockThreshold={lowStockThreshold}
+                  onThresholdChange={handleThresholdChange}
                 />
               </motion.div>
             )}

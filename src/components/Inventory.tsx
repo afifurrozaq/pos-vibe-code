@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
-import { Search, Plus, Settings, Trash2, X, Package } from 'lucide-react';
+import { Search, Plus, Settings, Trash2, X, Package, AlertTriangle, History, Layers, Sparkles, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, Category } from '../types';
 import { api } from '../services/api';
+import { geminiService } from '../services/geminiService';
+import { ConfirmationModal } from './ConfirmationModal';
+import { StockHistoryModal } from './StockHistoryModal';
 
 interface InventoryProps {
   products: Product[];
@@ -10,14 +13,28 @@ interface InventoryProps {
   onRefresh: () => void;
   isOnline: boolean;
   onOfflineAction: (type: 'product', data: any) => void;
+  lowStockThreshold: number;
+  onThresholdChange: (threshold: number) => void;
 }
 
-export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRefresh, isOnline, onOfflineAction }) => {
+export const Inventory: React.FC<InventoryProps> = ({ 
+  products, 
+  categories, 
+  onRefresh, 
+  isOnline, 
+  onOfflineAction,
+  lowStockThreshold,
+  onThresholdChange
+}) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<number | 'all'>('all');
   const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out'>('all');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [conflictData, setConflictData] = useState<any | null>(null);
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   const filteredProducts = products.filter(p => {
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -28,7 +45,7 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
       : p.stock;
       
     let matchesStock = true;
-    if (stockFilter === 'low') matchesStock = totalStock > 0 && totalStock < 10;
+    if (stockFilter === 'low') matchesStock = totalStock > 0 && totalStock < lowStockThreshold;
     if (stockFilter === 'out') matchesStock = totalStock <= 0;
     
     return matchesSearch && matchesCategory && matchesStock;
@@ -72,7 +89,7 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
 
     const payload = {
       ...editingProduct,
-      image_url: editingProduct?.image_url || `https://picsum.photos/seed/${Math.random()}/400/400`
+      image_url: editingProduct?.image_url || `https://picsum.photos/seed/${encodeURIComponent(editingProduct?.name || 'product')}/400/400`
     };
 
     if (!isOnline) {
@@ -89,27 +106,62 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
       onRefresh();
     } catch (err: any) {
       if (err.type === 'conflict') {
-        if (confirm(`Conflict: This product was updated by another device. Overwrite with your changes?`)) {
-          await api.saveProduct({ ...payload, updated_at: Math.floor(Date.now() / 1000) });
-          setIsModalOpen(false);
-          setEditingProduct(null);
-          onRefresh();
-        }
+        setConflictData(payload);
       } else {
         alert(err.message || 'Operation failed');
       }
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (confirm('Are you sure you want to delete this product?')) {
-      try {
-        await api.deleteProduct(id);
-        onRefresh();
-      } catch (err: any) {
-        alert(err.message);
-      }
+  const handleResolveConflict = async () => {
+    if (!conflictData) return;
+    try {
+      await api.saveProduct({ ...conflictData, updated_at: Math.floor(Date.now() / 1000) });
+      setIsModalOpen(false);
+      setEditingProduct(null);
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Resolution failed');
     }
+    setConflictData(null);
+  };
+
+  const openAddVariant = (product: Product) => {
+    setEditingProduct({
+      ...product,
+      variants: [...(product.variants || []), { id: Date.now(), product_id: product.id, name: '', stock: 0, price_adjustment: 0 }]
+    });
+    setIsModalOpen(true);
+  };
+  const generateAIImage = async () => {
+    if (!editingProduct?.name) {
+      alert("Please enter a product name first");
+      return;
+    }
+    setIsGeneratingImage(true);
+    try {
+      const imageUrl = await geminiService.generateProductImage(editingProduct.name);
+      if (imageUrl) {
+        setEditingProduct(prev => ({ ...prev, image_url: imageUrl }));
+      } else {
+        alert("Failed to generate image");
+      }
+    } catch (error) {
+      alert("Error generating image");
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteConfirmId) return;
+    try {
+      await api.deleteProduct(deleteConfirmId);
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message);
+    }
+    setDeleteConfirmId(null);
   };
 
   return (
@@ -146,9 +198,18 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
             onChange={(e) => setStockFilter(e.target.value as any)}
           >
             <option value="all">All Stock Levels</option>
-            <option value="low">Low Stock (&lt;10)</option>
+            <option value="low">Low Stock (&lt;{lowStockThreshold})</option>
             <option value="out">Out of Stock</option>
           </select>
+          <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-xl px-3 py-2">
+            <span className="text-xs font-bold text-zinc-500 uppercase">Alert at:</span>
+            <input 
+              type="number" 
+              className="w-12 bg-transparent outline-none text-sm font-bold text-zinc-900"
+              value={lowStockThreshold}
+              onChange={(e) => onThresholdChange(Math.max(1, parseInt(e.target.value) || 1))}
+            />
+          </div>
           <button 
             onClick={() => { setEditingProduct({ name: '', price: 0, stock: 0, category_id: categories[0]?.id }); setIsModalOpen(true); }}
             className="bg-zinc-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-zinc-800 transition-colors whitespace-nowrap"
@@ -176,7 +237,7 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                 <td className="p-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-zinc-100 rounded-lg overflow-hidden">
-                      <img src={product.image_url || `https://picsum.photos/seed/${product.id}/100/100`} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      <img src={product.image_url || `https://picsum.photos/seed/${encodeURIComponent(product.name)}/100/100`} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                     </div>
                     <div>
                       <span className="font-bold text-zinc-900 block">{product.name}</span>
@@ -198,22 +259,21 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                       {(() => {
                         const totalStock = product.variants.reduce((sum, v) => sum + v.stock, 0);
                         return (
-                          <span className={`text-xs font-bold block ${totalStock <= 0 ? 'text-red-600' : totalStock < 10 ? 'text-amber-600' : 'text-zinc-500'}`}>
+                          <span className={`text-xs font-bold block ${totalStock <= 0 ? 'text-red-600' : totalStock < lowStockThreshold ? 'text-amber-600' : 'text-zinc-500'}`}>
                             Total: {totalStock} units
                           </span>
                         );
                       })()}
                       <div className="flex flex-wrap gap-1">
-                        {product.variants.slice(0, 2).map(v => (
-                          <span key={v.id} className={`text-[10px] px-1 rounded font-medium ${v.stock <= 0 ? 'bg-red-50 text-red-600' : v.stock < 5 ? 'bg-amber-50 text-amber-600' : 'bg-zinc-100 text-zinc-500'}`}>
+                        {product.variants.map(v => (
+                          <span key={v.id} className={`text-[10px] px-1 rounded font-medium ${v.stock <= 0 ? 'bg-red-50 text-red-600' : v.stock < (lowStockThreshold / 2) ? 'bg-amber-50 text-amber-600' : 'bg-zinc-100 text-zinc-500'}`}>
                             {v.name}: {v.stock}
                           </span>
                         ))}
-                        {product.variants.length > 2 && <span className="text-[10px] text-zinc-400">+{product.variants.length - 2} more</span>}
                       </div>
                     </div>
                   ) : (
-                    <span className={`font-bold ${product.stock <= 0 ? 'text-red-600' : product.stock < 10 ? 'text-amber-600' : 'text-zinc-900'}`}>
+                    <span className={`font-bold ${product.stock <= 0 ? 'text-red-600' : product.stock < lowStockThreshold ? 'text-amber-600' : 'text-zinc-900'}`}>
                       {product.stock} units
                     </span>
                   )}
@@ -221,13 +281,27 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                 <td className="p-4 text-right">
                   <div className="flex items-center justify-end gap-2">
                     <button 
+                      onClick={() => setHistoryProduct(product)}
+                      className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all"
+                      title="View History"
+                    >
+                      <History size={18} />
+                    </button>
+                    <button 
+                      onClick={() => openAddVariant(product)}
+                      className="p-2 text-zinc-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
+                      title="Add Variant"
+                    >
+                      <Layers size={18} />
+                    </button>
+                    <button 
                       onClick={() => { setEditingProduct(product); setIsModalOpen(true); }}
                       className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all"
                     >
                       <Settings size={18} />
                     </button>
                     <button 
-                      onClick={() => handleDelete(product.id)}
+                      onClick={() => setDeleteConfirmId(product.id)}
                       className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                     >
                       <Trash2 size={18} />
@@ -261,11 +335,38 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                 <h3 className="text-xl font-bold text-zinc-900">{editingProduct?.id ? 'Edit Product' : 'Add New Product'}</h3>
                 <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors"><X size={20} /></button>
               </div>
+              <div className="px-6 pt-4">
+                {editingProduct?.id && (
+                  <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 flex justify-between items-center">
+                    <div>
+                      <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Current Total Stock</p>
+                      <p className="text-2xl font-black text-zinc-900">
+                        {editingProduct.variants && editingProduct.variants.length > 0 
+                          ? editingProduct.variants.reduce((sum, v) => sum + v.stock, 0)
+                          : editingProduct.stock} units
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Status</p>
+                      {(() => {
+                        const total = editingProduct.variants && editingProduct.variants.length > 0 
+                          ? editingProduct.variants.reduce((sum, v) => sum + v.stock, 0)
+                          : (editingProduct.stock || 0);
+                        return (
+                          <span className={`text-xs font-bold px-2 py-1 rounded-full ${total <= 0 ? 'bg-red-100 text-red-600' : total < lowStockThreshold ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                            {total <= 0 ? 'Out of Stock' : total < lowStockThreshold ? 'Low Stock' : 'In Stock'}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1">Product Image</label>
                   <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 bg-zinc-100 rounded-xl overflow-hidden flex-shrink-0 border border-zinc-200">
+                    <div className="w-16 h-16 bg-zinc-100 rounded-xl overflow-hidden flex-shrink-0 border border-zinc-200 relative group/img">
                       {editingProduct?.image_url ? (
                         <img src={editingProduct.image_url} alt="Preview" className="w-full h-full object-cover" />
                       ) : (
@@ -273,13 +374,29 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                           <Package size={24} />
                         </div>
                       )}
+                      {isGeneratingImage && (
+                        <div className="absolute inset-0 bg-white/60 backdrop-blur-sm flex items-center justify-center">
+                          <Loader2 size={20} className="animate-spin text-emerald-600" />
+                        </div>
+                      )}
                     </div>
-                    <input 
-                      type="file" 
-                      accept="image/*"
-                      className="text-xs text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
-                      onChange={handleImageChange}
-                    />
+                    <div className="flex flex-col gap-2">
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        className="text-xs text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
+                        onChange={handleImageChange}
+                      />
+                      <button
+                        type="button"
+                        onClick={generateAIImage}
+                        disabled={isGeneratingImage || !editingProduct?.name}
+                        className="flex items-center gap-2 text-xs font-bold text-emerald-600 hover:text-emerald-700 disabled:opacity-50 transition-colors"
+                      >
+                        {isGeneratingImage ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        Generate with AI
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -343,20 +460,39 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
                   <div className="space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
                     {editingProduct?.variants?.map((variant, index) => (
                       <div key={variant.id} className="flex items-center gap-2 bg-zinc-50 p-2 rounded-xl border border-zinc-200">
-                        <input 
-                          type="text" 
-                          placeholder="Name (e.g. XL, Red)"
-                          className="flex-1 min-w-0 bg-transparent outline-none text-sm font-medium"
-                          value={variant.name}
-                          onChange={e => updateVariant(index, 'name', e.target.value)}
-                        />
-                        <input 
-                          type="number" 
-                          placeholder="Stock"
-                          className="w-16 bg-transparent outline-none text-sm font-medium text-center"
-                          value={variant.stock}
-                          onChange={e => updateVariant(index, 'stock', Number(e.target.value))}
-                        />
+                        <div className="flex-1 min-w-0">
+                          <input 
+                            type="text" 
+                            placeholder="Name (e.g. XL, Red)"
+                            className="w-full bg-transparent outline-none text-sm font-bold text-zinc-900"
+                            value={variant.name}
+                            onChange={e => updateVariant(index, 'name', e.target.value)}
+                          />
+                        </div>
+                        <div className="flex flex-col items-center border-x border-zinc-200 px-2">
+                          <span className="text-[8px] font-black text-zinc-400 uppercase leading-none mb-1">Stock</span>
+                          <input 
+                            type="number" 
+                            placeholder="Qty"
+                            className="w-12 bg-transparent outline-none text-sm font-bold text-center text-zinc-900"
+                            value={variant.stock}
+                            onChange={e => updateVariant(index, 'stock', Number(e.target.value))}
+                          />
+                        </div>
+                        <div className="flex flex-col items-center px-2">
+                          <span className="text-[8px] font-black text-zinc-400 uppercase leading-none mb-1">Price Adj</span>
+                          <div className="flex items-center gap-0.5">
+                            <span className="text-[10px] text-zinc-400">$</span>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              placeholder="0.00"
+                              className="w-12 bg-transparent outline-none text-sm font-bold text-zinc-900"
+                              value={variant.price_adjustment || 0}
+                              onChange={e => updateVariant(index, 'price_adjustment', Number(e.target.value))}
+                            />
+                          </div>
+                        </div>
                         <button 
                           type="button"
                           onClick={() => removeVariant(index)}
@@ -380,6 +516,31 @@ export const Inventory: React.FC<InventoryProps> = ({ products, categories, onRe
           </div>
         )}
       </AnimatePresence>
+
+      <ConfirmationModal
+        isOpen={deleteConfirmId !== null}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={handleDelete}
+        title="Delete Product"
+        message="Are you sure you want to delete this product? This action cannot be undone and will remove all associated stock data."
+        confirmText="Delete Product"
+      />
+
+      <ConfirmationModal
+        isOpen={conflictData !== null}
+        onClose={() => setConflictData(null)}
+        onConfirm={handleResolveConflict}
+        title="Conflict Detected"
+        message="This product was updated by another device while you were editing. Do you want to overwrite the server's version with your changes?"
+        confirmText="Overwrite Server"
+        variant="warning"
+      />
+
+      <StockHistoryModal 
+        isOpen={historyProduct !== null}
+        onClose={() => setHistoryProduct(null)}
+        product={historyProduct}
+      />
     </div>
   );
 };
