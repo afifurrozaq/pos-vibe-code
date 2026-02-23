@@ -1,6 +1,7 @@
 export interface Category {
   id: number;
   name: string;
+  updated_at?: number;
 }
 
 export interface ProductVariant {
@@ -20,6 +21,7 @@ export interface Product {
   category_name?: string;
   image_url?: string;
   variants?: ProductVariant[];
+  updated_at?: number;
 }
 
 export interface CartItem extends Product {
@@ -35,9 +37,15 @@ export interface Sale {
   item_count: number;
 }
 
+export interface DailyRevenue {
+  date: string;
+  revenue: number;
+}
+
 export interface Stats {
   revenue: number;
   salesCount: number;
   lowStockCount: number;
   recentSales: Sale[];
+  dailyRevenue: DailyRevenue[];
 }
